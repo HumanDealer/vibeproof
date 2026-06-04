@@ -1,0 +1,20 @@
+# Secrets — never commit
+.env
+.env.*
+*.pem
+*.key
+secrets/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Dependencies / build artifacts (in case this repo grows tooling later)
+node_modules/
+dist/
+build/
+__pycache__/
+.venv/
