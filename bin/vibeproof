@@ -165,7 +165,8 @@ cmd_doctor() {
   local wired=0
   [ -f .pre-commit-config.yaml ] && wired=$((wired+1))
   [ -d .github/workflows ] && wired=$((wired+1))
-  ls .git/hooks/pre-push 2>/dev/null | grep -q . && wired=$((wired+1))
+  local hookdir; hookdir=$(git config core.hooksPath 2>/dev/null); [ -n "$hookdir" ] || hookdir=.git/hooks
+  { [ -f "$hookdir/pre-push" ] || [ -f .githooks/pre-push ]; } && wired=$((wired+1))
   echo "${DIM}wired enforcement mechanisms found: $wired${RST}"
   local flagged=0
   while IFS= read -r f; do
