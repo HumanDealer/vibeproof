@@ -109,6 +109,21 @@ The **rules** are the heart of it. Everything else is delivery.
    written down. The agent gets smarter, not just busier.
    (`rules/error-prevention.md`, `rules/memory-system.md`)
 
+## Self-improving (optional, automatic)
+
+Opt-in hooks turn every session into compounding knowledge — no manual step:
+
+- **`hooks/conversation-recorder.sh`** — records every dialogue to your Obsidian
+  vault as Markdown (Stop hook).
+- **`hooks/feedback-detector.sh`** — when you say "this is bad / not what I wanted",
+  it captures that exact moment as a lesson (UserPromptSubmit hook).
+- **`hooks/daily-digest.sh`** — once a day, headless Claude reads the day's sessions
+  + flagged moments and writes you a one-page validation digest.
+
+Wire them via `templates/settings.hooks.json`, point `$VIBEPROOF_VAULT` at your
+vault. See [`docs/SELF-IMPROVING.md`](docs/SELF-IMPROVING.md). Built for the
+non-coder who can't audit a diff but knows when something's wrong.
+
 ---
 
 ## Works with
