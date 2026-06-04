@@ -1,0 +1,29 @@
+{
+  "_comment": "The self-improving hooks. Merge into ~/.claude/settings.json under the top-level 'hooks' key (add these commands alongside any existing hooks — do not replace the array). Set VIBEPROOF_VAULT or the scripts default to the local Knowledge Vault. Hooks DIR is ~/.claude-config/hooks on Mac, ~/.claude/hooks on a server.",
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude-config/hooks/feedback-detector.sh" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "bash ~/.claude-config/hooks/conversation-recorder.sh" }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "(bash ~/.claude-config/hooks/daily-digest.sh >/dev/null 2>&1 &)" }
+        ]
+      }
+    ]
+  }
+}
