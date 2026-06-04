@@ -95,12 +95,16 @@ The **rules** are the heart of it. Everything else is delivery.
 
 ## The four pillars
 
-1. **Gates, not vibes.** Tests, lint, types, and a secret scan run *before*
-   every commit. No "let CI catch it." (`rules/code-quality.md`)
-2. **Branches, always.** Never push to `main`. Every change is a reviewable
-   PR, even when you're solo. (`rules/git-workflow.md`)
-3. **Evidence over claims.** "Done" requires proof — passing tests, a clean
-   diff, a real check. (`rules/verify-your-work.md`)
+1. **Gates, not vibes.** Tests, lint, types, and a secret scan run via
+   `vibeproof check` — a real script with a one-line verdict, wired to a
+   pre-push hook so it runs before code leaves your machine. Not a request to
+   the agent; a command it runs. (`bin/vibeproof`, `rules/code-quality.md`)
+2. **Branches, always.** Never push to `main` — and the
+   `templates/settings.deny.json` deny-list *blocks the command* so the agent
+   can't, even by accident. (`rules/git-workflow.md`)
+3. **Evidence over claims.** "Done" requires proof: the `vibeproof check`
+   verdict line — `READY` or `BLOCKED` — that you can read without reading code.
+   (`rules/verify-your-work.md`)
 4. **Memory that compounds.** Every bug becomes a rule; every decision is
    written down. The agent gets smarter, not just busier.
    (`rules/error-prevention.md`, `rules/memory-system.md`)

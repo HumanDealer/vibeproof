@@ -1,0 +1,23 @@
+name: vibeproof
+on: [push, pull_request]
+
+# This repo is public, so these jobs CAN be set as required status checks
+# (Settings → Branches → protect `main`). On a private free-plan repo they still
+# run as a bonus layer — the local pre-push hook is the always-on guarantee.
+jobs:
+  honesty:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: vibeproof doctor — docs may not claim un-wired enforcement
+        run: ./bin/vibeproof doctor
+      - name: shellcheck the CLI
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck -S warning bin/vibeproof
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: vibeproof check
+        run: ./bin/vibeproof check

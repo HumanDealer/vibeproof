@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# vibeproof pre-push hook — runs the gate before any push reaches the remote.
+# Committed + activated via `git config core.hooksPath .githooks` (done by `vibeproof init`).
+# This is the LOCAL, free, every-repo enforcement — no CI minutes, no paid plan.
+HERE="$(git rev-parse --show-toplevel)"
+VP="$HERE/bin/vibeproof"
+[ -x "$VP" ] || VP="vibeproof"   # fall back to PATH if repo has no vendored copy
+if ! "$VP" check; then
+  echo ""
+  echo "push blocked by vibeproof check — fix the ✗ lines above, or this push leaks broken code." >&2
+  exit 1
+fi
