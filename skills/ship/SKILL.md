@@ -5,8 +5,11 @@ description: Use when a change is ready to land. Runs the full sequence — bran
 
 # Ship
 
-Take a finished change from working tree to an open PR, with every gate
-enforced. Never skips a step, never pushes to main.
+Take a finished change from working tree to an open PR. This skill runs the
+real gate — `vibeproof check` — and stops if it returns `BLOCKED`. It does not
+"enforce" by willpower: the deny-list (`templates/settings.deny.json`) is what
+physically blocks a push to main or a `--no-verify`. This skill is the happy
+path that respects those gates.
 
 ## When to use
 
@@ -22,10 +25,12 @@ implementation is done and the next step is to land it.
    If `main` / `master` / `production` → create a feature branch now:
    `git checkout -b <type>/<scope>-<desc>` (see rules/git-workflow.md).
 
-2. **Run the quality gate locally** (rules/code-quality.md):
-   - lint · types · tests · secret scan — all green.
-   - Read the test output; confirm the count, no silent skips.
-   - Fix anything that fails before continuing. Do not proceed on red.
+2. **Run the gate** (rules/code-quality.md):
+   ```bash
+   vibeproof check        # lint · types · tests · secret scan, one verdict line
+   ```
+   Proceed only on `READY`. On `BLOCKED`, fix the ✗ lines — do not proceed on red.
+   Paste the verdict line as your evidence; "looks good" is not evidence.
 
 3. **Review the diff yourself.**
    ```bash

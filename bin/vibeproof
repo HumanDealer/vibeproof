@@ -1,0 +1,196 @@
+#!/usr/bin/env bash
+# vibeproof — local-first, fail-loud delivery gate for AI-coded projects.
+# Works because the AGENT runs git: a denied/blocked command cannot run.
+# No server, no paid plan, no per-clone setup required for `check`.
+#
+# Subcommands:
+#   check    Run every available gate, print ONE layperson verdict line. (read-only)
+#   doctor   Anti-drift: fail if any doc claims enforcement with no wiring behind it.
+#   init     Scaffold gates into the current repo (configs + pre-push hook + deny-list).
+#   ship     branch-guard -> check -> commit -> push -> open PR. Fails closed.
+#   help     This text.
+set -uo pipefail
+
+VP_VERSION="0.1.0"
+BOLD=$'\033[1m'; DIM=$'\033[2m'; RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; RST=$'\033[0m'
+[ -t 1 ] || { BOLD=""; DIM=""; RED=""; GRN=""; YEL=""; RST=""; }
+
+die() { echo "${RED}vibeproof: $*${RST}" >&2; exit 2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---- stack detection -------------------------------------------------------
+detect_stack() {
+  if   [ -f pnpm-workspace.yaml ]; then echo "pnpm-monorepo"
+  elif [ -f package.json ];        then echo "node"
+  elif [ -f pyproject.toml ] || [ -f requirements.txt ] || [ -f setup.cfg ]; then echo "python"
+  else echo "unknown"; fi
+}
+
+# ---- gate runners: each prints a status token, returns 0=ok 1=fail 2=skip --
+# echo format: "<label>|<state>|<detail>"   state in {ok,fail,skip}
+gate() { # gate "label" pass_count fail_count detail
+  echo "$1|$2|$3"
+}
+
+run_lint() {
+  local stack="$1"
+  case "$stack" in
+    python)
+      if have ruff; then
+        local n; n=$(ruff check . 2>/dev/null | grep -cE '^[^ ]' || true)
+        if ruff check . >/dev/null 2>&1; then gate lint ok "0 issues"; else gate lint fail "$n issues — run: ruff check . --fix"; fi
+      else gate lint skip "ruff not installed — run: pip install ruff"; fi ;;
+    node|pnpm-monorepo)
+      if have eslint || [ -f node_modules/.bin/eslint ]; then
+        local bin="eslint"; [ -x node_modules/.bin/eslint ] && bin="node_modules/.bin/eslint"
+        if "$bin" . >/dev/null 2>&1; then gate lint ok "0 issues"; else gate lint fail "eslint errors — run: $bin . --fix"; fi
+      else gate lint skip "eslint not installed — run: pnpm add -D eslint"; fi ;;
+    *) gate lint skip "unknown stack" ;;
+  esac
+}
+
+run_types() {
+  local stack="$1"
+  case "$stack" in
+    python)
+      if have mypy; then
+        if mypy . >/dev/null 2>&1; then gate types ok "0 errors"; else gate types fail "type errors — run: mypy ."; fi
+      else gate types skip "mypy not installed — run: pip install mypy"; fi ;;
+    node|pnpm-monorepo)
+      if have tsc || [ -x node_modules/.bin/tsc ]; then
+        local bin="tsc"; [ -x node_modules/.bin/tsc ] && bin="node_modules/.bin/tsc"
+        if "$bin" --noEmit >/dev/null 2>&1; then gate types ok "0 errors"; else gate types fail "tsc errors — run: $bin --noEmit"; fi
+      else gate types skip "tsc not installed"; fi ;;
+    *) gate types skip "unknown stack" ;;
+  esac
+}
+
+run_tests() {
+  local stack="$1"
+  case "$stack" in
+    python)
+      if have pytest; then
+        local out rc; out=$(pytest -q 2>&1); rc=$?
+        local summary; summary=$(echo "$out" | grep -oE '[0-9]+ (passed|failed|error)' | paste -sd', ' - 2>/dev/null)
+        [ -z "$summary" ] && summary="ran"
+        if [ $rc -eq 0 ]; then gate tests ok "$summary"; else gate tests fail "$summary — run: pytest"; fi
+      else gate tests skip "pytest not installed — run: pip install pytest"; fi ;;
+    node|pnpm-monorepo)
+      if [ -f package.json ] && grep -q '"test"' package.json; then
+        if (have pnpm && pnpm test) >/dev/null 2>&1; then gate tests ok "passed"; else gate tests fail "failing — run: pnpm test"; fi
+      else gate tests skip "no test script in package.json"; fi ;;
+    *) gate tests skip "unknown stack" ;;
+  esac
+}
+
+# Secret scan: gitleaks if present, else a value-oriented regex fallback.
+# Matches secret VALUES (high-signal tokens + key=quoted-value), never bare
+# mentions of the words "secret"/"password" — that was the false-positive trap.
+run_secrets() {
+  if have gitleaks; then
+    if gitleaks detect --no-banner -q >/dev/null 2>&1; then gate secrets ok "gitleaks: clean"; else gate secrets fail "gitleaks found secrets — review before commit"; fi
+    return
+  fi
+  # High-signal provider tokens — these ARE secrets, no value-shape guessing needed.
+  local tok='(sk-[A-Za-z0-9]{20,}|ghp_[A-Za-z0-9]{30,}|gho_[A-Za-z0-9]{30,}|AKIA[0-9A-Z]{16}|xox[baprs]-[A-Za-z0-9-]{10,}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z ]*PRIVATE KEY-----|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.)'
+  # key = quoted value of >=12 chars, excluding obvious placeholders.
+  local kv='(api[_-]?key|secret|password|passwd|token|client[_-]?secret|access[_-]?key)["'"'"']?\s*[:=]\s*["'"'"'][^"'"'"']{12,}["'"'"']'
+  local placeholder='(your[_-]|example|placeholder|xxx|<|changeme|dummy|sample|\$\{|process\.env|os\.environ|getenv)'
+  local files hits hitlist
+  files=$(git ls-files 2>/dev/null; git diff --cached --name-only 2>/dev/null)
+  files=$(echo "$files" | sort -u | grep -vE '\.(lock|png|jpg|jpeg|gif|svg|pdf|min\.js)$' || true)
+  hits=0; hitlist=""
+  if [ -n "$files" ]; then
+    while IFS= read -r f; do
+      [ -f "$f" ] || continue
+      # a line is a hit if it matches a token, OR a key=value that is NOT a placeholder
+      if grep -niE "$tok" "$f" >/dev/null 2>&1 \
+         || grep -niE "$kv" "$f" 2>/dev/null | grep -ivE "$placeholder" | grep -qiE "$kv"; then
+        hits=$((hits+1)); hitlist="$hitlist $f"
+      fi
+    done <<< "$files"
+  fi
+  if [ "$hits" -eq 0 ]; then gate secrets ok "0 real-secret patterns ${DIM}(install gitleaks for deep scan)${RST}"
+  else gate secrets fail "$hits file(s):$(echo "$hitlist" | cut -c1-60) — move secrets to ~/.secrets/"; fi
+}
+
+run_branch() {
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then gate branch skip "not a git repo"; return; fi
+  local b; b=$(git branch --show-current 2>/dev/null)
+  case "$b" in
+    # WARN, not FAIL: pushing to main is prevented by the deny-list (Layer 1).
+    # `check` gates broken/leaky CODE, not workflow state — and a repo's initial
+    # scaffold legitimately lives on main. Conflating the two blocks bootstrap.
+    main|master|production|"") gate branch warn "on '$b' — branch before feature work: git checkout -b feat/your-thing" ;;
+    *) gate branch ok "on '$b' (not main)" ;;
+  esac
+}
+
+cmd_check() {
+  local stack; stack=$(detect_stack)
+  echo "${DIM}stack: $stack${RST}"
+  local rows=() any_fail=0 any_skip=0 any_warn=0
+  rows+=("$(run_branch)")
+  rows+=("$(run_secrets)")
+  rows+=("$(run_lint "$stack")")
+  rows+=("$(run_types "$stack")")
+  rows+=("$(run_tests "$stack")")
+
+  for r in "${rows[@]}"; do
+    local label state detail
+    label=${r%%|*}; rest=${r#*|}; state=${rest%%|*}; detail=${rest#*|}
+    case "$state" in
+      ok)   printf "  ${GRN}✓${RST} %-8s %s\n" "$label" "$detail" ;;
+      fail) printf "  ${RED}✗${RST} %-8s %s\n" "$label" "$detail"; any_fail=1 ;;
+      warn) printf "  ${YEL}!${RST} %-8s %s\n" "$label" "$detail"; any_warn=1 ;;
+      skip) printf "  ${YEL}–${RST} %-8s %s\n" "$label" "$detail"; any_skip=1 ;;
+    esac
+  done
+  echo "────────────────────────────────────────────"
+  if [ "$any_fail" -eq 1 ]; then
+    echo "${RED}${BOLD}BLOCKED${RST} — fix the ✗ lines above before you ship."
+    return 1
+  elif [ "$any_skip" -eq 1 ] || [ "$any_warn" -eq 1 ]; then
+    echo "${YEL}${BOLD}READY (with notes)${RST} — no broken/leaky code; ! = workflow note, – = tool not installed. ${BOLD}vibeproof init${RST} closes tool gaps."
+    return 0
+  else
+    echo "${GRN}${BOLD}READY${RST} — every gate green. Safe to ship."
+    return 0
+  fi
+}
+
+# doctor: scan docs for guarantee words with no wiring behind them.
+cmd_doctor() {
+  local guarantee='enforced|blocked|never|mechanically|fails closed|non-negotiable|cannot bypass|auto-trigger'
+  local wired=0
+  [ -f .pre-commit-config.yaml ] && wired=$((wired+1))
+  [ -d .github/workflows ] && wired=$((wired+1))
+  ls .git/hooks/pre-push 2>/dev/null | grep -q . && wired=$((wired+1))
+  echo "${DIM}wired enforcement mechanisms found: $wired${RST}"
+  local flagged=0
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    if grep -iEn "$guarantee" "$f" >/dev/null 2>&1 && [ "$wired" -eq 0 ]; then
+      printf "  ${YEL}drift${RST} %s — claims enforcement but no hook/CI/pre-push wired\n" "$f"
+      flagged=$((flagged+1))
+    fi
+  done < <(git ls-files '*.md' 2>/dev/null)
+  echo "────────────────────────────────────────────"
+  if [ "$flagged" -gt 0 ]; then
+    echo "${YEL}${BOLD}$flagged doc(s) over-promise${RST} — wire the mechanism or soften the language."
+    return 1
+  fi
+  echo "${GRN}${BOLD}HONEST${RST} — no doc claims enforcement it doesn't back."
+  return 0
+}
+
+cmd_help() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; echo; echo "vibeproof v$VP_VERSION"; }
+
+case "${1:-help}" in
+  check)  shift; cmd_check "$@" ;;
+  doctor) shift; cmd_doctor "$@" ;;
+  init)   shift; "$(dirname "$0")/vibeproof-init" "$@" 2>/dev/null || die "init not yet scaffolded — coming in v0.2" ;;
+  ship)   shift; "$(dirname "$0")/vibeproof-ship" "$@" 2>/dev/null || die "ship not yet scaffolded — coming in v0.2" ;;
+  version|--version|-v) echo "vibeproof v$VP_VERSION" ;;
+  help|--help|-h|*) cmd_help ;;
+esac

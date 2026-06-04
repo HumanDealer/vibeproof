@@ -1,0 +1,40 @@
+{
+  "_comment": "vibeproof deny-list — the REAL enforcement layer. Drop into ~/.claude/settings.json (merge into permissions.deny). Works because the AI agent runs these commands: a denied command physically cannot execute. No paid plan, no server. Hardened beyond a force-push-only list: blocks ALL direct pushes to protected branches and all hook-skipping.",
+  "permissions": {
+    "deny": [
+      "Bash(rm -rf /*)",
+      "Bash(*rm -rf /*)",
+      "Bash(sudo *)",
+
+      "Bash(git push*main*)",
+      "Bash(git push*master*)",
+      "Bash(git push*production*)",
+      "Bash(git push*origin HEAD:main*)",
+      "Bash(*--force-push*)",
+      "Bash(*force-with-lease=*)",
+      "Bash(git push --force*)",
+      "Bash(*--hard origin/main*)",
+      "Bash(*reset --hard*)",
+
+      "Bash(*--no-verify*)",
+      "Bash(git commit*-n *)",
+      "Bash(*[skip ci]*)",
+
+      "Bash(*DROP TABLE*)",
+      "Bash(*DROP DATABASE*)",
+      "Bash(*TRUNCATE *)",
+      "Bash(docker system prune*)",
+      "Bash(docker volume prune*)",
+
+      "Read(.env)",
+      "Read(.env.*)",
+      "Read(*credentials*.json)",
+      "Read(*client_secret*)",
+      "Read(*.secret)",
+      "Read(*.key)",
+      "Read(*.pem)",
+      "Read(*service-account*.json)",
+      "Read(~/.ssh/*)"
+    ]
+  }
+}
